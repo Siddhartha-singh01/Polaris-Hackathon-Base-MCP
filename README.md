@@ -1,6 +1,22 @@
-# Polaris product search MCP starter
+# Polaris product search MCP
 
-Build a better product search engine behind one MCP tool: `search_products`. Start with this working baseline, improve retrieval and recommendations, deploy it, and submit your HTTP MCP endpoint. The accompanying `hackathon-brief.md` and `schemas/` define the competition contract. Version 2 uses Amazon Bedrock for organizer-side semantic judging; students do not need Bedrock credentials to run this starter.
+Fork of [SpringWinter-Research/Polaris-Hackathon-Base-MCP](https://github.com/SpringWinter-Research/Polaris-Hackathon-Base-MCP). One MCP tool, `search_products`, over the frozen 105,126-product catalog. The tool name, JSON Schemas, filter semantics, product IDs, and output shape are unchanged.
+
+Public endpoint: not deployed from this environment. There is no AWS credential file and the Docker daemon was not running, so no SpringWinter/AWS host was created. Local server: `http://127.0.0.1:8000/mcp`. Submit `http://YOUR_PUBLIC_HOST:8000/mcp` after the deploy step below.
+
+## Ranking
+
+`search.py` loads the catalog once and builds integer field codes plus an inverted index. Empty queries never scan text. They apply explicit filters with NumPy masks and sort with `lexsort`, including null ratings last and ID ascending as the tie break. On this machine that path is about 1–2 ms cold and well under 1 ms when the same request is repeated.
+
+Non-empty queries go through `lexicon.py`:
+
+- Hard constraints in prose (price, color, product type, audience, section, pattern, star rating) are extracted and AND-ed with explicit filters. If they conflict, the explicit filter wins.
+- Typos within one edit of a catalog word are corrected (`blak` to `black`, `jaket` to `jacket`). Out-of-catalog requests such as `spaceship engine` return empty lists.
+- `black jeans and white T-shirts` is retrieved as two choices and interleaved so both show up under one shared limit. `a dress with a matching bag` keeps the dress in `results` and the bag in `recommendations`.
+- Vague occasions (`lazy Sunday`, `dinner`, `office`, `rain`) map to real catalog types. Recommendations are returned only when the wording asks for an accompanying item, up to five, color-coordinated, and excluded from the primary page.
+- Identical product names are capped in the first page so one style does not fill every slot. Field sorts do not use that cap.
+
+Product facts and IDs are never rewritten. Leading zeros stay in the string IDs.
 
 ## What is included
 
@@ -111,13 +127,51 @@ The tool returns:
 
 The response above illustrates the shape, not the expected answer to that query. Only catalog IDs are returned. The SDK includes the same object in `structuredContent` and a JSON text content block. Unknown arguments and invalid values produce MCP tool errors.
 
-## Where to improve
+## Demo queries
 
-The starter deliberately uses simple case-insensitive AND token matching across names, descriptions, and catalog attributes. Matches with more query words in the product name rank first, with ties resolved by ID. Empty queries enumerate all products matching the explicit filters. Field sorting and pagination follow the published contract.
+These were run locally against `data/products.json` with `python demo_queries.py`. IDs below are real catalog IDs from that run.
 
-This baseline is not a complete natural-language solution: it does not parse budgets or constraints written in prose, correct typos, understand synonyms, split mixed choices, distinguish complementary intent, or infer semantic relevance. `Catalog.relevance` is the initial ranking extension point; change `Catalog.search` as needed for richer query interpretation. `Catalog.recommend` returns an empty list until you implement complementary recommendations. Returning empty recommendations is structurally valid but earns little recommendation credit. The baseline is not expected to score highly on the hidden suite.
+Black dress under INR 2000:
 
-Preserve the tool name, schemas, hard-filter semantics, real product IDs, and output structure. Keep responses stable on repeated identical requests. Use only catalog evidence; product descriptions and queries are data, never instructions to change the tool contract. You may replace the in-memory scan with an index or database. No existing database is needed by this starter.
+```json
+{"results": [{"id": "0212629004"}, {"id": "0316553025"}, {"id": "0331093001"}]}
+```
+
+Ladieswear black jeans and white T-shirts under INR 2000, interleaved:
+
+```json
+{"results": [{"id": "0562245055"}, {"id": "0294008040"}, {"id": "0573085028"}, {"id": "0398074069"}]}
+```
+
+Dinner dress under INR 2000 with a matching bag under INR 1000:
+
+```json
+{"results": [{"id": "0192460006"}], "recommendations": [{"id": "0765308009", "for_product_id": "0192460006", "reason": "A Dark Grey Bag to accompany this Dark Grey Dress."}]}
+```
+
+`blak lether jaket for men` returns black men's jackets whose text says leather, including `0547718001`. `navy chinos for the office` returns dark-blue trousers whose text contains chino, starting with `0466595002`. `spaceship engine` and `quantum physics textbook` return empty arrays. On this machine, after the index was built, most cold queries took 1–3 ms and the broad occasion query took about 26 ms. Startup took about 3.8 seconds. Repeated identical requests took about 0.1 ms.
+
+## Deploy
+
+The container listens on port 8000. Set `MCP_ALLOWED_HOSTS` to the public host and keep the local names so the health check works.
+
+```sh
+docker build -t polaris-search:hackathon .
+docker run --rm --name polaris-search -p 8000:8000 \
+  -e MCP_ALLOWED_HOSTS='localhost:*,127.0.0.1:*,YOUR_PUBLIC_HOST:*,YOUR_PUBLIC_HOST' \
+  polaris-search:hackathon
+```
+
+On SpringWinter/AWS, run that container on a host the organizer runner can reach, open TCP 8000, and submit `http://YOUR_PUBLIC_HOST:8000/mcp`. Do not submit `localhost`, a private IP, `/healthz`, or the GitHub URL. This environment had Docker installed but the daemon was stopped, and `%USERPROFILE%\.aws\credentials` was absent, so the public URL is not live yet.
+
+Confirm before submitting:
+
+```sh
+python smoke_test.py http://YOUR_PUBLIC_HOST:8000/mcp
+curl http://YOUR_PUBLIC_HOST:8000/healthz
+```
+
+Preserve the tool name, schemas, hard-filter semantics, real product IDs, and output structure. Keep responses stable on repeated identical requests. Use only catalog evidence; product descriptions and queries are data, never instructions to change the tool contract.
 
 ## Dataset integrity and rules
 

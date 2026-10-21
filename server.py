@@ -1,6 +1,8 @@
 """One MCP tool, ordinary JSON HTTP responses, no frontend required."""
 import contextlib
+import logging
 import os
+import time
 from pathlib import Path
 
 import anyio
@@ -15,6 +17,11 @@ from starlette.routing import Route
 
 from search import Catalog, INPUT_SCHEMA, OUTPUT_SCHEMA
 
+logging.basicConfig(
+    level=os.getenv('LOG_LEVEL', 'INFO'),
+    format='%(asctime)s %(levelname)s %(name)s %(message)s',
+)
+LOG = logging.getLogger('polaris.server')
 server = Server('polaris-product-search', version='1.0.0')
 catalog = None
 
@@ -30,8 +37,14 @@ async def list_tools():
 async def call_tool(name, arguments):
     if name != 'search_products':
         raise ValueError('Unknown tool')
-    # Keep synchronous baseline search off the HTTP event loop.
-    return await anyio.to_thread.run_sync(catalog.search, arguments)
+    # Keep synchronous search off the HTTP event loop.
+    try:
+        return await anyio.to_thread.run_sync(catalog.search, arguments)
+    except ValueError:
+        raise
+    except Exception:
+        LOG.exception('search_products failed')
+        raise
 
 
 security = TransportSecuritySettings(
@@ -46,7 +59,9 @@ sessions = StreamableHTTPSessionManager(server, json_response=True, stateless=Tr
 async def lifespan(app):
     global catalog
     path = os.getenv('CATALOG_PATH', str(Path(__file__).parent / 'data/products.json'))
+    started = time.perf_counter()
     catalog = await anyio.to_thread.run_sync(Catalog.load, path)
+    LOG.info('catalog ready products=%s seconds=%.2f', len(catalog.products), time.perf_counter() - started)
     async with sessions.run():
         yield
 

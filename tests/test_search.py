@@ -40,6 +40,20 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(self.ids(query='   '), ['001','002','003','004'])
         self.assertEqual(self.catalog.search({'query':'skirt','include_recommendations':True})['recommendations'], [])
 
+    def test_query_price_and_filter_precedence(self):
+        self.assertEqual(self.ids(query='cotton top under 600'), ['002'])
+        self.assertEqual(self.ids(query='black cotton top', filters={'color': 'White'}), ['003'])
+        self.assertEqual(self.ids(query='cottn top'), ['001', '002', '003'])
+
+    def test_mixed_and_complements(self):
+        self.assertEqual(self.ids(query='cotton vest and cotton skirt'), ['001', '004', '002', '003'])
+        out = self.catalog.search({'query': 'cotton top with a matching skirt', 'include_recommendations': True})
+        self.assertEqual([item['id'] for item in out['results']], ['001', '002', '003'])
+        self.assertEqual(out['recommendations'][0]['id'], '004')
+        self.assertEqual(out['recommendations'][0]['for_product_id'], '001')
+        again = self.catalog.search({'query': 'cotton top with a matching skirt', 'include_recommendations': True})
+        self.assertEqual(out, again)
+
     def test_invalid_arguments(self):
         for args in [{'limit':0},{'limit':True},{'offset':-1},{'sort_by':'unknown'},
                      {'unexpected':1},{'filters':{'color':' '}},
